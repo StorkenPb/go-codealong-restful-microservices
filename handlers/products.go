@@ -1,12 +1,14 @@
 package handlers
 
 import (
+	"context"
+	"fmt"
 	"log"
 	"net/http"
-	"regexp"
 	"strconv"
 
 	"github.com/StorkenPb/restful-microservices-codealong/data"
+	"github.com/gorilla/mux"
 )
 
 type Products struct {
@@ -17,58 +19,7 @@ func NewProducts(l* log.Logger) *Products {
 	return &Products{l}
 }
 
-func (p *Products) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
-	// all requests will end up in here
-	// Check what method is used
-
-	// GET
-	if r.Method == http.MethodGet {
-		p.getProducts(rw, r)
-		return
-	}
-
-	//POST (create)
-	if r.Method == http.MethodPost {
-		p.addProduct(rw, r)
-		return
-	}
-
-	//PUT (update)
-	if r.Method == http.MethodPut {
-		// Expects the id in the URI
-		reg := regexp.MustCompile(`/([0-9]+)`)
-		matches := reg.FindAllStringSubmatch(r.URL.Path, -1)
-
-		if len(matches) != 1 {
-			p.l.Println("Invalid URI, more than one id", r.URL.Path)
-			http.Error(rw, "Invalid URI - expecting product id in URI", http.StatusBadRequest)
-			return
-		}
-
-		if len(matches[0]) != 2 {
-			p.l.Println("path", r.URL.Path)
-			p.l.Println("Invalid URI, more than two capture groups", matches)
-			http.Error(rw, "Invalid URI - expecting product id in URI", http.StatusBadRequest)
-			return
-		}
-
-		idString := matches[0][1]
-		id, err := strconv.Atoi(idString)
-		if err != nil {
-			p.l.Println("Invalid URI, unable to convert to number", idString)
-			http.Error(rw, "Invalid URI - expecting product id in URI", http.StatusBadRequest)
-			return
-		}
-		
-		p.updateProduct(id, rw, r)
-		return
-	}
-
-	// Catch all - If the methoud is not recognized, then a 405 is sent back
-	rw.WriteHeader(http.StatusMethodNotAllowed)
-}
-
-func (p *Products) getProducts(rw http.ResponseWriter, r *http.Request){
+func (p *Products) GetProducts(rw http.ResponseWriter, r *http.Request){
 	p.l.Println("Handle GET product")
 	products := data.GetProducts()
 	
@@ -80,32 +31,28 @@ func (p *Products) getProducts(rw http.ResponseWriter, r *http.Request){
 	}
 }
 
-func (p*Products) addProduct(rw http.ResponseWriter, r *http.Request){
-	p.l.Println("Handle POST product")
+func (p*Products) AddProduct(rw http.ResponseWriter, r *http.Request){
+	p.l.Println("Handle POST product", r.Context().Value(KeyProduct{}))
 
-	product := &data.Product{}
-	
-	err := product.FromJSON(r.Body)
-	if err != nil {
-		http.Error(rw, "Unable to unmarshal product JSON", http.StatusBadRequest)
-		return
-	}
+	product := r.Context().Value(KeyProduct{}).(data.Product)
 
-	data.AddProduc(product)
+	data.AddProduc(&product)
 }
 
-func (p *Products) updateProduct(id int, rw http.ResponseWriter, r *http.Request){
+func (p *Products) UpdateProduct(rw http.ResponseWriter, r *http.Request){
 	p.l.Println("Handle PUT product")
 
-	product := &data.Product{}
-	
-	err := product.FromJSON(r.Body)
+	// Id comes from the router as a map
+	vars := mux.Vars(r)
+	id, err := strconv.Atoi(vars["id"])
 	if err != nil {
-		http.Error(rw, "Unable to unmarshal product JSON", http.StatusBadRequest)
-		return
+		http.Error(rw, "Unable to convert id to integer", http.StatusBadRequest)
 	}
 
-	err = data.UpdateProduct(id, product)
+	// product comes from the middleware
+	product := r.Context().Value(KeyProduct{}).(data.Product)
+	
+	err = data.UpdateProduct(id, &product)
 	if err == data.ErrProductNotFount {
 		p.l.Println(err)
 		http.Error(rw, "Product not found", http.StatusBadRequest)
@@ -118,4 +65,36 @@ func (p *Products) updateProduct(id int, rw http.ResponseWriter, r *http.Request
 	}
 
 	rw.Write([]byte("Successfully updated product"))
+}
+
+type KeyProduct struct {}
+
+func (p *Products) MiddlewareProductValidation(next http.Handler) http.Handler {
+
+	return http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request){
+		prod := data.Product{}
+		
+		err := prod.FromJSON(r.Body)
+		if err != nil {
+			p.l.Println("[ERROR] deserializing product", err)
+			http.Error(rw, "Error reading product", http.StatusBadRequest)
+			return
+		}
+
+		err = prod.Validate()
+		if err != nil {
+			http.Error(
+				rw,
+				fmt.Sprintf("Error validating product: %s", err),
+				http.StatusBadRequest,
+			)
+			return
+		}
+
+		// Passing the product as a value in the context 
+		ctx := context.WithValue(r.Context(), KeyProduct{}, prod)
+		req := r.WithContext(ctx)
+
+		next.ServeHTTP(rw, req)
+	})
 }
