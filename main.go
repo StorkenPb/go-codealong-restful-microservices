@@ -1,22 +1,52 @@
 package main
 
 import (
-	"fmt"
-	"io"
+	"context"
+	"log"
 	"net/http"
+	"os"
+	"os/signal"
+	"time"
+
+	"github.com/StorkenPb/restful-microservices-codealong/handlers"
 )
 
 func main() {
-	http.HandleFunc("/", func(rw http.ResponseWriter, r*http.Request) {
-		d, err := io.ReadAll(r.Body)
 
-		if(err != nil) {
-			http.Error(rw, "oops", http.StatusBadRequest)
-			return
+	l := log.New(os.Stdout, "product-api", log.LstdFlags)
+
+	// Create handlers
+	products := handlers.NewProducts(l)
+
+	// Attach handler to the server mux
+	mux := http.NewServeMux()
+	mux.Handle("/", products)
+
+	httpServer := &http.Server{
+		Addr: ":9090",
+		Handler: mux,
+		IdleTimeout: 120 * time.Second,
+		ReadTimeout: 1 * time.Second,
+		WriteTimeout: 1 * time.Second,
+	}
+
+
+	go func ()  {
+		err := httpServer.ListenAndServe()
+		if err != nil {
+			l.Fatal(err)
 		}
+	}()
 
-		fmt.Fprintf(rw, "Hey, this was your data: %s", d)
-	})
+	// Set up channel on which to send signal notifications.
+	signalChannel := make(chan os.Signal, 1)
+	signal.Notify(signalChannel, os.Interrupt)
+	signal.Notify(signalChannel, os.Kill)
 
-	http.ListenAndServe(":9090", nil)
+	// Block until a signal is recived
+	sig := <- signalChannel
+	l.Println("Shutdown in 30 sec", sig)
+
+	timeoutContext, _ := context.WithTimeout(context.Background(), 30*time.Second)
+	httpServer.Shutdown(timeoutContext)
 }
