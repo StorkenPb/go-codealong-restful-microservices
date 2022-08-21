@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/StorkenPb/restful-microservices-codealong/handlers"
+	"github.com/gorilla/mux"
 )
 
 func main() {
@@ -16,15 +17,27 @@ func main() {
 	l := log.New(os.Stdout, "product-api", log.LstdFlags)
 
 	// Create handlers
-	products := handlers.NewProducts(l)
+	productsHandler := handlers.NewProducts(l)
 
 	// Attach handler to the server mux
-	mux := http.NewServeMux()
-	mux.Handle("/", products)
+	//mux := http.NewServeMux()
+	//mux.Handle("/", productsHandler)
+
+	serverMux := mux.NewRouter()
+	getRouter := serverMux.Methods(http.MethodGet).Subrouter()
+	getRouter.HandleFunc("/products", productsHandler.GetProducts)
+
+	putRouter := serverMux.Methods(http.MethodPut).Subrouter()
+	putRouter.HandleFunc("/products/{id:[0-9]+}", productsHandler.UpdateProduct)
+	putRouter.Use(productsHandler.MiddlewareProductValidation)
+
+	postRouter := serverMux.Methods(http.MethodPost).Subrouter()
+	postRouter.HandleFunc("/products", productsHandler.AddProduct)
+	postRouter.Use(productsHandler.MiddlewareProductValidation)
 
 	httpServer := &http.Server{
 		Addr: ":9090",
-		Handler: mux,
+		Handler: serverMux,
 		IdleTimeout: 120 * time.Second,
 		ReadTimeout: 1 * time.Second,
 		WriteTimeout: 1 * time.Second,
@@ -47,6 +60,6 @@ func main() {
 	sig := <- signalChannel
 	l.Println("Shutdown in 30 sec", sig)
 
-	timeoutContext, _ := context.WithTimeout(context.Background(), 30*time.Second)
+	timeoutContext, _ := context.WithTimeout(context.Background(), 30 * time.Second)
 	httpServer.Shutdown(timeoutContext)
 }
